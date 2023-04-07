@@ -1,0 +1,208 @@
+locals {
+  principal_org_id = "{{state the id}}"
+}
+
+# data source to lookup information about the current AWS partition in which Terraform is working
+data "aws_partition" "current" {}
+
+#creating root certificate as a resource
+resource "aws_acmpca_certificate_authority" "root" {
+  type = "ROOT"
+
+  certificate_authority_configuration {
+    key_algorithm     = "RSA_4096"
+    signing_algorithm = "SHA512WITHRSA"
+
+    subject {
+      common_name  = "Root CA"
+      organization = "TSG INTERACTIVE SERVICES LIMITED"
+      locality     = "Onchan"
+      country      = "IM"
+    }
+  }
+}
+
+#provide root policy document permissions
+data "aws_iam_policy_document" "root_policy_document" {
+  version = "2012-10-17"
+
+  statement {
+    sid    = "AllowIssueCertificate"
+    effect = "Allow"
+
+    principals {
+      identifiers = ["*"]
+      type        = "AWS"
+    }
+
+    actions = ["acm-pca:IssueCertificate"]
+
+    resources = [aws_acmpca_certificate_authority.root.arn]
+
+    condition {
+      test     = "StringEquals"
+      values   = ["arn:aws:acm-pca:::template/EndEntityCertificate/V1"]
+      variable = "acm-pca:TemplateArn"
+    }
+
+    condition {
+      test     = "StringEquals"
+      values   = [local.principal_org_id]
+      variable = "aws:PrincipalOrgID"
+    }
+  }
+
+  statement {
+    sid    = "AllowReadCertificate"
+    effect = "Allow"
+
+    principals {
+      identifiers = ["*"]
+      type        = "AWS"
+    }
+
+    actions = [
+      "acm-pca:DescribeCertificateAuthority",
+      "acm-pca:GetCertificate",
+      "acm-pca:GetCertificateAuthorityCertificate",
+      "acm-pca:ListPermissions",
+      "acm-pca:ListTags"
+    ]
+
+    resources = [aws_acmpca_certificate_authority.root.arn]
+
+    condition {
+      test     = "StringEquals"
+      values   = [local.principal_org_id]
+      variable = "aws:PrincipalOrgID"
+    }
+  }
+}
+
+#create root policy for Certificate
+resource "aws_acmpca_policy" "root" {
+  policy       = data.aws_iam_policy_document.root_policy_document.json
+  resource_arn = aws_acmpca_certificate_authority.root.arn
+}
+
+resource "aws_acmpca_certificate" "root" {
+  certificate_authority_arn   = aws_acmpca_certificate_authority.root.arn
+  certificate_signing_request = aws_acmpca_certificate_authority.root.certificate_signing_request
+  signing_algorithm           = "SHA512WITHRSA"
+  template_arn                = "arn:${data.aws_partition.current.partition}:acm-pca:::template/RootCACertificate/V1"
+
+  validity {
+    type  = "YEARS"
+    value = 5
+  }
+}
+
+#adding certificate authority settings for root certificate
+resource "aws_acmpca_certificate_authority_certificate" "root" {
+  certificate_authority_arn = aws_acmpca_certificate_authority.root.arn
+  certificate               = aws_acmpca_certificate.root.certificate
+  certificate_chain         = aws_acmpca_certificate.root.certificate_chain
+}
+
+#creates subordinate certificate authority from root
+resource "aws_acmpca_certificate_authority" "subordinate" {
+  certificate_authority_configuration {
+    key_algorithm     = "RSA_4096"
+    signing_algorithm = "SHA512WITHRSA"
+
+    subject {
+      common_name  = "Subordinate CA"
+      organization = "{{NAME OF THE ORGANISATION}}"
+      locality     = "Onchan"
+      country      = "IM"
+    }
+  }
+}
+
+#Provide policy document for subordinate certificate
+data "aws_iam_policy_document" "subordinate_policy_document" {
+  version = "2012-10-17"
+
+  statement {
+    sid    = "AllowIssueCertificate"
+    effect = "Allow"
+
+    principals {
+      identifiers = ["*"]
+      type        = "AWS"
+    }
+
+    actions = ["acm-pca:IssueCertificate"]
+
+    resources = [aws_acmpca_certificate_authority.subordinate.arn]
+
+    condition {
+      test     = "StringEquals"
+      values   = ["arn:aws:acm-pca:::template/EndEntityCertificate/V1"]
+      variable = "acm-pca:TemplateArn"
+    }
+
+    condition {
+      test     = "StringEquals"
+      values   = [local.principal_org_id]
+      variable = "aws:PrincipalOrgID"
+    }
+  }
+
+  statement {
+    sid    = "AllowReadCertificate"
+    effect = "Allow"
+
+    principals {
+      identifiers = ["*"]
+      type        = "AWS"
+    }
+
+    actions = [
+      "acm-pca:DescribeCertificateAuthority",
+      "acm-pca:GetCertificate",
+      "acm-pca:GetCertificateAuthorityCertificate",
+      "acm-pca:ListPermissions",
+      "acm-pca:ListTags"
+    ]
+
+    resources = [aws_acmpca_certificate_authority.subordinate.arn]
+
+    condition {
+      test     = "StringEquals"
+      values   = [local.principal_org_id]
+      variable = "aws:PrincipalOrgID"
+    }
+  }
+}
+
+#attach policy to the subordinate certificate
+resource "aws_acmpca_policy" "subordinate" {
+  policy       = data.aws_iam_policy_document.subordinate_policy_document.json
+  resource_arn = aws_acmpca_certificate_authority.subordinate.arn
+}
+
+#adding additional settings for subordinate certificate
+resource "aws_acmpca_certificate" "subordinate" {
+  certificate_authority_arn   = aws_acmpca_certificate_authority.root.arn
+  certificate_signing_request = aws_acmpca_certificate_authority.subordinate.certificate_signing_request
+  signing_algorithm           = "SHA512WITHRSA"
+  template_arn                = "arn:${data.aws_partition.current.partition}:acm-pca:::template/SubordinateCACertificate_PathLen0/V1"
+
+  validity {
+    type  = "YEARS"
+    value = 3
+  }
+}
+
+#adding additional settings for subordinate certificate authority
+resource "aws_acmpca_certificate_authority_certificate" "subordinate" {
+  certificate_authority_arn = aws_acmpca_certificate_authority.subordinate.arn
+  certificate               = aws_acmpca_certificate.subordinate.certificate
+  certificate_chain         = aws_acmpca_certificate.subordinate.certificate_chain
+}
+
+#create a resource certificate for applying into service/application
+resource "aws_acm_certificate" "application/service" {
+  certificate_authority_arn = var.centralised_subordinate_certificate_arn #provide aws_acmpca_certificate_authority_certificate.subordinate.arn
+  domain_name               = "{{enter domain name for certifiate purpose}}"
