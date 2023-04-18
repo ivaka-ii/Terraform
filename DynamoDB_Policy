@@ -1,0 +1,165 @@
+/**********************************************************
+* DynamoDB Example build role and attach policy
+**********************************************************/
+
+data "aws_iam_policy_document" "dynamodb_key_policy" {
+  version = "2012-10-17"
+
+  source_policy_documents = [data.aws_iam_policy_document.common_key_policy_document.json]
+
+  dynamic "statement" {
+    for_each = var.workload_accounts
+
+    content {
+      sid = "{{name}}${index(keys(var.workload_accounts), statement.key)}"
+      actions = [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey",
+        "kms:ReEncrypt*"
+      ]
+      effect = "Allow"
+
+      principals {
+        identifiers = ["*"]
+        type        = "AWS"
+      }
+
+      resources = ["*"]
+
+      dynamic "condition" {
+        for_each = var.workload_vpc_ids[statement.key] != null ? [var.workload_vpc_ids[statement.key]] : []
+        content {
+          test     = "StringEquals"
+          values   = [condition.value]
+          variable = "aws:SourceVpc"
+        }
+      }
+
+      condition {
+        test     = "StringEquals"
+        values   = [statement.value]
+        variable = "aws:SourceAccount"
+      }
+
+      condition {
+        test     = "StringEquals"
+        values   = ["dynamodb.eu-west-1.amazonaws.com"]
+        variable = "kms:ViaService"
+      }
+
+      condition {
+        test = "StringEquals"
+        values = ["arn:aws:iam::${statement.value}:role/{{name of the role}}",
+        "arn:aws:iam::${statement.value}:role/dtpl-reg-reporting-${statement.key}-role-data-processing"]
+        variable = "aws:PrincipalArn"
+      }
+
+      condition {
+        test     = "Bool"
+        values   = ["true"]
+        variable = "aws:SecureTransport"
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.workload_accounts
+
+    content {
+      sid = "RegRptLambdasAccessToKMSKeys${index(keys(var.workload_accounts), statement.key)}"
+      actions = [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey",
+        "kms:ReEncrypt*"
+      ]
+      effect = "Allow"
+
+      principals {
+        identifiers = ["*"]
+        type        = "AWS"
+      }
+
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        values   = ["arn:aws:iam::${statement.value}:role/{{name_of_role}}"]
+        variable = "aws:PrincipalArn"
+      }
+
+      dynamic "condition" {
+        for_each = var.workload_vpc_ids[statement.key] != null ? [var.workload_vpc_ids[statement.key]] : []
+        content {
+          test     = "StringEquals"
+          values   = [condition.value]
+          variable = "aws:SourceVpc"
+        }
+      }
+
+      condition {
+        test     = "StringEquals"
+        values   = [statement.value]
+        variable = "aws:SourceAccount"
+      }
+
+      condition {
+        test     = "StringEquals"
+        values   = ["dynamodb.eu-west-1.amazonaws.com"]
+        variable = "kms:ViaService"
+      }
+
+      condition {
+        test     = "Bool"
+        values   = ["true"]
+        variable = "aws:SecureTransport"
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.workload_accounts
+
+    content {
+      sid = "AllowAttachmentOfPersistentResourcesFromRegRptAccount${index(keys(var.workload_accounts), statement.key)}"
+      actions = [
+        "kms:CreateGrant",
+        "kms:ListGrants",
+        "kms:RevokeGrant"
+      ]
+      effect = "Allow"
+
+      principals {
+        identifiers = ["*"]
+        type        = "AWS"
+      }
+
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        values   = ["arn:aws:iam::${statement.value}:root"]
+        variable = "aws:PrincipalArn"
+      }
+
+      condition {
+        test     = "Bool"
+        values   = ["true"]
+        variable = "kms:GrantIsForAWSResource"
+      }
+    }
+  }
+}
+
+resource "aws_kms_key" "dynamodb" {
+  enable_key_rotation = true
+  policy              = data.aws_iam_policy_document.dynamodb_key_policy.json
+}
+
+resource "aws_kms_alias" "dynamodb" {
+  name          = "alias/dynamodb"
+  target_key_id = aws_kms_key.dynamodb.key_id
+}
